@@ -9,6 +9,8 @@
 extern "C" {
     #include <libavcodec/avcodec.h>
     #include <libavformat/avformat.h>
+    #include <libavutil/error.h>
+    #include <libavutil/opt.h>
     #include <libavutil/imgutils.h>
     #include <libswscale/swscale.h>
 }
@@ -24,6 +26,12 @@ private:
     int frame_rate = 30;
     int width = 0;
     int height = 0;
+    int64_t bit_rate = 4000000;
+    int quality = 23;
+    String rate_control_mode = "vbr";
+    String preset = "medium";
+    String profile;
+    int keyframe_interval = 12;
 
     int encode_internal(const Vector<Ref<Image>> &p_frames, const String &p_path, PackedByteArray *r_bytes);
     int encode_internal(const Array &p_frames, const String &p_path, PackedByteArray *r_bytes);
@@ -39,6 +47,12 @@ public:
     void set_pixel_format(const String &p_name);
     void set_frame_rate(int p_rate);
     void set_resolution(int p_width, int p_height);
+    void set_bit_rate(int64_t p_bit_rate);
+    void set_rate_control_mode(const String &p_mode);
+    void set_quality(int p_quality);
+    void set_preset(const String &p_preset);
+    void set_profile(const String &p_profile);
+    void set_keyframe_interval(int p_interval);
 
     // Encode an array of Image or ImageTexture frames into a video file.
     // Returns 0 on success.

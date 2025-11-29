@@ -1,12 +1,53 @@
 #include "ffmpeg_audio_encoder.h"
 
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <godot_cpp/variant/variant.hpp>
 #include <cstring>
 
 namespace godot {
 
 static void log_ffmpeg(const String &msg) {
     UtilityFunctions::print("[FFmpegAudioEncoder] ", msg);
+}
+
+static void apply_option_to_target(void *p_target, const char *p_key, const Variant &p_value) {
+    if (!p_target || p_value.get_type() == Variant::NIL) {
+        return;
+    }
+
+    int err = 0;
+    switch (p_value.get_type()) {
+        case Variant::INT:
+            err = av_opt_set_int(p_target, p_key, static_cast<int64_t>(p_value), 0);
+            break;
+        case Variant::FLOAT:
+            err = av_opt_set_double(p_target, p_key, static_cast<double>(p_value), 0);
+            break;
+        case Variant::BOOL:
+            err = av_opt_set_int(p_target, p_key, bool(p_value) ? 1 : 0, 0);
+            break;
+        default: {
+            const CharString utf8_value = String(p_value).utf8();
+            err = av_opt_set(p_target, p_key, utf8_value.get_data(), 0);
+            break;
+        }
+    }
+
+    if (err < 0) {
+        char err_buf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(err, err_buf, sizeof(err_buf));
+        log_ffmpeg("Could not apply option '" + String(p_key) + "' (" + String(err_buf) + ")");
+    }
+}
+
+static void apply_option_to_encoder(AVCodecContext *p_ctx, const char *p_key, const Variant &p_value) {
+    if (!p_ctx) {
+        return;
+    }
+    apply_option_to_target(p_ctx, p_key, p_value);
+    if (p_ctx->priv_data) {
+        apply_option_to_target(p_ctx->priv_data, p_key, p_value);
+    }
 }
 
 FFmpegAudioEncoder::FFmpegAudioEncoder() {
@@ -31,7 +72,7 @@ FFmpegAudioEncoder::~FFmpegAudioEncoder() {
 
 void FFmpegAudioEncoder::_bind_methods() {
     ClassDB::bind_method(
-        D_METHOD("setup_encoder", "codec_name", "sample_rate", "channels", "bit_rate"),
+        D_METHOD("setup_encoder", "codec_name", "sample_rate", "channels", "bit_rate", "options"),
         &FFmpegAudioEncoder::setup_encoder
     );
     ClassDB::bind_method(
@@ -44,7 +85,7 @@ void FFmpegAudioEncoder::_bind_methods() {
     );
 }
 
-int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_rate, int p_channels, int p_bit_rate) {
+int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_rate, int p_channels, int p_bit_rate, const Dictionary &p_options) {
     // Clean any previous encoder state
     if (packet) {
         av_packet_free(&packet);
@@ -60,10 +101,31 @@ int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_r
     }
     initialized = false;
 
-    if (p_sample_rate <= 0 || p_channels <= 0 || p_bit_rate <= 0) {
+    int target_bit_rate = p_bit_rate;
+    if (p_options.has("bit_rate")) {
+        const Variant opt_br = p_options["bit_rate"];
+        if (opt_br.is_num()) {
+            target_bit_rate = static_cast<int>(opt_br);
+        }
+    }
+
+    if (p_sample_rate <= 0 || p_channels <= 0 || target_bit_rate <= 0) {
         log_ffmpeg("Invalid encoder parameters");
         return 1;
     }
+
+    String bitrate_mode = "cbr";
+    if (p_options.has("bitrate_mode")) {
+        bitrate_mode = String(p_options["bitrate_mode"]).to_lower();
+    }
+
+    int quality = -1;
+    if (p_options.has("quality") && Variant(p_options["quality"]).is_num()) {
+        quality = static_cast<int>(p_options["quality"]);
+    }
+
+    const String profile = p_options.has("profile") ? String(p_options["profile"]) : String();
+    const String preset = p_options.has("preset") ? String(p_options["preset"]) : String();
 
     const CharString codec_name_utf8 = p_codec_name.utf8();
     const AVCodec *codec = avcodec_find_encoder_by_name(codec_name_utf8.get_data());
@@ -82,7 +144,7 @@ int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_r
     channels = p_channels;
 
     codec_ctx->sample_rate = sample_rate;
-    codec_ctx->bit_rate = p_bit_rate;
+    codec_ctx->bit_rate = target_bit_rate;
 
     // ---------- Channel layout (FFmpeg 5+/8 style: AVChannelLayout) ----------
     // Set codec_ctx->ch_layout, not codec_ctx->channels / channel_layout.
@@ -108,6 +170,24 @@ int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_r
     }
 
     codec_ctx->sample_fmt = sample_fmt;
+
+    // ---------- Rate control / quality options ----------
+    if (!profile.is_empty()) {
+        apply_option_to_encoder(codec_ctx, "profile", profile);
+    }
+    if (!preset.is_empty()) {
+        apply_option_to_encoder(codec_ctx, "preset", preset);
+    }
+
+    if (bitrate_mode == "vbr") {
+        apply_option_to_encoder(codec_ctx, "vbr", true);
+        if (quality >= 0) {
+            apply_option_to_encoder(codec_ctx, "compression_level", quality);
+            apply_option_to_encoder(codec_ctx, "q", quality);
+        }
+    } else {
+        apply_option_to_encoder(codec_ctx, "vbr", false);
+    }
 
 
     // Open encoder

@@ -11,11 +11,57 @@ static void log_video_encoder(const String &p_msg) {
     UtilityFunctions::print("[FFmpegVideoEncoder] ", p_msg);
 }
 
+static void apply_video_option_to_target(void *p_target, const char *p_key, const Variant &p_value) {
+    if (!p_target || p_value.get_type() == Variant::NIL) {
+        return;
+    }
+
+    int err = 0;
+    switch (p_value.get_type()) {
+        case Variant::INT:
+            err = av_opt_set_int(p_target, p_key, static_cast<int64_t>(p_value), 0);
+            break;
+        case Variant::FLOAT:
+            err = av_opt_set_double(p_target, p_key, static_cast<double>(p_value), 0);
+            break;
+        case Variant::BOOL:
+            err = av_opt_set_int(p_target, p_key, bool(p_value) ? 1 : 0, 0);
+            break;
+        default: {
+            const CharString utf8_value = String(p_value).utf8();
+            err = av_opt_set(p_target, p_key, utf8_value.get_data(), 0);
+            break;
+        }
+    }
+
+    if (err < 0) {
+        char err_buf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(err, err_buf, sizeof(err_buf));
+        log_video_encoder("Could not apply option '" + String(p_key) + "' (" + String(err_buf) + ")");
+    }
+}
+
+static void apply_video_option(AVCodecContext *p_ctx, const char *p_key, const Variant &p_value) {
+    if (!p_ctx) {
+        return;
+    }
+    apply_video_option_to_target(p_ctx, p_key, p_value);
+    if (p_ctx->priv_data) {
+        apply_video_option_to_target(p_ctx->priv_data, p_key, p_value);
+    }
+}
+
 void FFmpegVideoEncoder::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_codec_name", "name"), &FFmpegVideoEncoder::set_codec_name);
     ClassDB::bind_method(D_METHOD("set_pixel_format", "fmt"), &FFmpegVideoEncoder::set_pixel_format);
     ClassDB::bind_method(D_METHOD("set_frame_rate", "fps"), &FFmpegVideoEncoder::set_frame_rate);
     ClassDB::bind_method(D_METHOD("set_resolution", "width", "height"), &FFmpegVideoEncoder::set_resolution);
+    ClassDB::bind_method(D_METHOD("set_bit_rate", "bps"), &FFmpegVideoEncoder::set_bit_rate);
+    ClassDB::bind_method(D_METHOD("set_rate_control_mode", "mode"), &FFmpegVideoEncoder::set_rate_control_mode);
+    ClassDB::bind_method(D_METHOD("set_quality", "value"), &FFmpegVideoEncoder::set_quality);
+    ClassDB::bind_method(D_METHOD("set_preset", "preset"), &FFmpegVideoEncoder::set_preset);
+    ClassDB::bind_method(D_METHOD("set_profile", "profile"), &FFmpegVideoEncoder::set_profile);
+    ClassDB::bind_method(D_METHOD("set_keyframe_interval", "interval"), &FFmpegVideoEncoder::set_keyframe_interval);
     ClassDB::bind_method(D_METHOD("encode_images_to_file", "frames", "path"), &FFmpegVideoEncoder::encode_images_to_file);
     ClassDB::bind_method(D_METHOD("encode_images", "frames"), &FFmpegVideoEncoder::encode_images);
 
@@ -23,6 +69,12 @@ void FFmpegVideoEncoder::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "pixel_format"), "set_pixel_format", String());
     ADD_PROPERTY(PropertyInfo(Variant::INT, "frame_rate"), "set_frame_rate", Variant());
     ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "resolution"), "set_resolution", Variant());
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "bit_rate"), "set_bit_rate", Variant());
+    ADD_PROPERTY(PropertyInfo(Variant::STRING, "rate_control_mode"), "set_rate_control_mode", String());
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "quality"), "set_quality", Variant());
+    ADD_PROPERTY(PropertyInfo(Variant::STRING, "preset"), "set_preset", String());
+    ADD_PROPERTY(PropertyInfo(Variant::STRING, "profile"), "set_profile", String());
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "keyframe_interval"), "set_keyframe_interval", Variant());
 }
 
 void FFmpegVideoEncoder::set_codec_name(const String &p_name) {
@@ -48,6 +100,43 @@ void FFmpegVideoEncoder::set_resolution(int p_width, int p_height) {
     if (p_width > 0 && p_height > 0) {
         width = p_width;
         height = p_height;
+    }
+}
+
+void FFmpegVideoEncoder::set_bit_rate(int64_t p_bit_rate) {
+    if (p_bit_rate > 0) {
+        bit_rate = p_bit_rate;
+    }
+}
+
+void FFmpegVideoEncoder::set_rate_control_mode(const String &p_mode) {
+    const String lower = p_mode.to_lower();
+    if (lower == "cbr" || lower == "vbr") {
+        rate_control_mode = lower;
+    }
+}
+
+void FFmpegVideoEncoder::set_quality(int p_quality) {
+    if (p_quality >= 0) {
+        quality = p_quality;
+    }
+}
+
+void FFmpegVideoEncoder::set_preset(const String &p_preset) {
+    if (!p_preset.is_empty()) {
+        preset = p_preset;
+    }
+}
+
+void FFmpegVideoEncoder::set_profile(const String &p_profile) {
+    if (!p_profile.is_empty()) {
+        profile = p_profile;
+    }
+}
+
+void FFmpegVideoEncoder::set_keyframe_interval(int p_interval) {
+    if (p_interval > 0) {
+        keyframe_interval = p_interval;
     }
 }
 
@@ -192,7 +281,19 @@ int FFmpegVideoEncoder::encode_internal(const Vector<Ref<Image>> &p_frames, cons
         codec_ctx->pix_fmt = target_pix_fmt;
         codec_ctx->time_base = AVRational{1, frame_rate};
         codec_ctx->framerate = AVRational{frame_rate, 1};
-        codec_ctx->gop_size = 12;
+        codec_ctx->gop_size = keyframe_interval;
+
+        if (rate_control_mode == "cbr") {
+            codec_ctx->bit_rate = bit_rate;
+        } else {
+            codec_ctx->bit_rate = 0;
+            apply_video_option(codec_ctx, "crf", quality);
+        }
+
+        apply_video_option(codec_ctx, "preset", preset);
+        if (!profile.is_empty()) {
+            apply_video_option(codec_ctx, "profile", profile);
+        }
 
         if (codec_ctx->codec_id == AV_CODEC_ID_H265) {
             codec_ctx->profile = FF_PROFILE_HEVC_MAIN;
