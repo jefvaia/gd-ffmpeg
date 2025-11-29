@@ -5,6 +5,7 @@
 #include <godot_cpp/godot.hpp>
 
 #include "ffmpeg_audio_encoder.h"
+#include "ffmpeg_audio_decoder.h"
 
 using namespace godot;
 
@@ -14,6 +15,8 @@ void initialize_ffmpeg_module(ModuleInitializationLevel p_level) {
     }
 
     ClassDB::register_class<FFmpegAudioEncoder>();
+    ClassDB::register_class<FFmpegAudioDecoder>();
+    ClassDB::register_class<FFmpegAudioTranscoder>();
 }
 
 void uninitialize_ffmpeg_module(ModuleInitializationLevel p_level) {
