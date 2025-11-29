@@ -48,7 +48,7 @@ public:
     PackedByteArray encode_audio_frames(const Array &p_frames);
     PackedByteArray encode_audio_stream(const Ref<AudioStream> &p_stream);
 
-    // File output helpers (muxed by FFmpeg, still exposing raw bytes separately).
+    // File output helpers.
     int encode_pcm_to_file(const PackedFloat32Array &p_pcm_interleaved, const String &p_path);
     int encode_audio_frames_to_file(const Array &p_frames, const String &p_path);
     int encode_audio_stream_to_file(const Ref<AudioStream> &p_stream, const String &p_path);

@@ -15,22 +15,61 @@ FFmpegVideoDecoder::~FFmpegVideoDecoder() {
 }
 
 void FFmpegVideoDecoder::_bind_methods() {
-    ClassDB::bind_method(D_METHOD("set_preferred_codec", "name"), &FFmpegVideoDecoder::set_preferred_codec);
-    ClassDB::bind_method(D_METHOD("set_output_pixel_format", "fmt"), &FFmpegVideoDecoder::set_output_pixel_format);
-    ClassDB::bind_method(D_METHOD("set_output_resolution", "width", "height"), &FFmpegVideoDecoder::set_output_resolution);
-    ClassDB::bind_method(D_METHOD("load_file", "path"), &FFmpegVideoDecoder::load_file);
-    ClassDB::bind_method(D_METHOD("load_bytes", "data"), &FFmpegVideoDecoder::load_bytes);
-    ClassDB::bind_method(D_METHOD("decode_frames"), &FFmpegVideoDecoder::decode_frames);
-    ClassDB::bind_method(D_METHOD("decode_frame_bytes"), &FFmpegVideoDecoder::decode_frame_bytes);
-    ClassDB::bind_method(D_METHOD("decode_textures"), &FFmpegVideoDecoder::decode_textures);
-    ClassDB::bind_method(D_METHOD("decode_frames_from_file", "path"), &FFmpegVideoDecoder::decode_frames_from_file);
-    ClassDB::bind_method(D_METHOD("decode_frame_bytes_from_file", "path"), &FFmpegVideoDecoder::decode_frame_bytes_from_file);
-    ClassDB::bind_method(D_METHOD("decode_textures_from_file", "path"), &FFmpegVideoDecoder::decode_textures_from_file);
+    // Configuration
+    ClassDB::bind_method(
+        D_METHOD("set_preferred_codec", "name"),
+        &FFmpegVideoDecoder::set_preferred_codec
+    );
+    ClassDB::bind_method(
+        D_METHOD("set_output_pixel_format", "format"),
+        &FFmpegVideoDecoder::set_output_pixel_format
+    );
+    ClassDB::bind_method(
+        D_METHOD("set_output_resolution", "width", "height"),
+        &FFmpegVideoDecoder::set_output_resolution
+    );
 
-    ADD_PROPERTY(PropertyInfo(Variant::STRING, "preferred_codec"), "set_preferred_codec", String());
-    ADD_PROPERTY(PropertyInfo(Variant::STRING, "output_pixel_format"), "set_output_pixel_format", String());
-    ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "output_resolution"), "set_output_resolution", Variant());
+    // Input
+    ClassDB::bind_method(
+        D_METHOD("load_file", "path"),
+        &FFmpegVideoDecoder::load_file
+    );
+    ClassDB::bind_method(
+        D_METHOD("load_bytes", "data"),
+        &FFmpegVideoDecoder::load_bytes
+    );
+
+    // Decoding
+    ClassDB::bind_method(
+        D_METHOD("decode_frames"),
+        &FFmpegVideoDecoder::decode_frames
+    );
+    ClassDB::bind_method(
+        D_METHOD("decode_frame_bytes"),
+        &FFmpegVideoDecoder::decode_frame_bytes
+    );
+    ClassDB::bind_method(
+        D_METHOD("decode_textures"),
+        &FFmpegVideoDecoder::decode_textures
+    );
+
+    // Convenience file helpers
+    ClassDB::bind_method(
+        D_METHOD("decode_frames_from_file", "path"),
+        &FFmpegVideoDecoder::decode_frames_from_file
+    );
+    ClassDB::bind_method(
+        D_METHOD("decode_frame_bytes_from_file", "path"),
+        &FFmpegVideoDecoder::decode_frame_bytes_from_file
+    );
+    ClassDB::bind_method(
+        D_METHOD("decode_textures_from_file", "path"),
+        &FFmpegVideoDecoder::decode_textures_from_file
+    );
+
+    // No ADD_PROPERTY calls here (avoids getter/setter signature errors for now).
 }
+
 
 void FFmpegVideoDecoder::set_preferred_codec(const String &p_name) {
     preferred_codec = p_name;

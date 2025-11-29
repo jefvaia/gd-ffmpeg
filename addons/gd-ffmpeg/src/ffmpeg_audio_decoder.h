@@ -3,7 +3,6 @@
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/audio_stream_wav.hpp>
-#include <godot_cpp/variant/audio_frame.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 
@@ -39,6 +38,8 @@ private:
     int setup_resampler(const AVChannelLayout &p_src_layout);
     void clear_resources();
 
+    static int read_packet(void *opaque, uint8_t *buf, int buf_size);
+
 protected:
     static void _bind_methods();
 
@@ -54,7 +55,7 @@ public:
     int load_bytes(const PackedByteArray &p_bytes);
 
     PackedFloat32Array decode_pcm();
-    Array decode_audio_frames();
+    Array decode_audio_frames();                // now returns Array of {left,right} dictionaries
     Ref<AudioStreamWAV> decode_audio_stream();
 
     PackedFloat32Array decode_pcm_from_file(const String &p_path);

@@ -52,6 +52,7 @@ static void apply_video_option(AVCodecContext *p_ctx, const char *p_key, const V
 }
 
 void FFmpegVideoEncoder::_bind_methods() {
+    // Configuration setters
     ClassDB::bind_method(D_METHOD("set_codec_name", "name"), &FFmpegVideoEncoder::set_codec_name);
     ClassDB::bind_method(D_METHOD("set_pixel_format", "fmt"), &FFmpegVideoEncoder::set_pixel_format);
     ClassDB::bind_method(D_METHOD("set_frame_rate", "fps"), &FFmpegVideoEncoder::set_frame_rate);
@@ -62,20 +63,18 @@ void FFmpegVideoEncoder::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_preset", "preset"), &FFmpegVideoEncoder::set_preset);
     ClassDB::bind_method(D_METHOD("set_profile", "profile"), &FFmpegVideoEncoder::set_profile);
     ClassDB::bind_method(D_METHOD("set_keyframe_interval", "interval"), &FFmpegVideoEncoder::set_keyframe_interval);
-    ClassDB::bind_method(D_METHOD("encode_images_to_file", "frames", "path"), &FFmpegVideoEncoder::encode_images_to_file);
-    ClassDB::bind_method(D_METHOD("encode_images", "frames"), &FFmpegVideoEncoder::encode_images);
 
-    ADD_PROPERTY(PropertyInfo(Variant::STRING, "codec_name"), "set_codec_name", String());
-    ADD_PROPERTY(PropertyInfo(Variant::STRING, "pixel_format"), "set_pixel_format", String());
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "frame_rate"), "set_frame_rate", Variant());
-    ADD_PROPERTY(PropertyInfo(Variant::VECTOR2I, "resolution"), "set_resolution", Variant());
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "bit_rate"), "set_bit_rate", Variant());
-    ADD_PROPERTY(PropertyInfo(Variant::STRING, "rate_control_mode"), "set_rate_control_mode", String());
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "quality"), "set_quality", Variant());
-    ADD_PROPERTY(PropertyInfo(Variant::STRING, "preset"), "set_preset", String());
-    ADD_PROPERTY(PropertyInfo(Variant::STRING, "profile"), "set_profile", String());
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "keyframe_interval"), "set_keyframe_interval", Variant());
+    // Encoding entry points
+    ClassDB::bind_method(D_METHOD("encode_images_to_file", "frames", "path"),
+        &FFmpegVideoEncoder::encode_images_to_file);
+    ClassDB::bind_method(D_METHOD("encode_images", "frames"),
+        &FFmpegVideoEncoder::encode_images);
+
+    // (No ADD_PROPERTY calls here, so Godot won't complain about missing getters
+    //  or wrong setter signatures. If you later add getters + Vector2i setters,
+    //  you can reintroduce properties properly.)
 }
+
 
 void FFmpegVideoEncoder::set_codec_name(const String &p_name) {
     if (!p_name.is_empty()) {
@@ -298,10 +297,6 @@ int FFmpegVideoEncoder::encode_internal(const Vector<Ref<Image>> &p_frames, cons
             apply_video_option(codec_ctx, "profile", profile);
         }
 
-        if (codec_ctx->codec_id == AV_CODEC_ID_H265) {
-            codec_ctx->profile = FF_PROFILE_HEVC_MAIN;
-        }
-
         if (fmt_ctx->oformat->flags & AVFMT_GLOBALHEADER) {
             codec_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
         }
@@ -514,6 +509,50 @@ int FFmpegVideoEncoder::encode_internal(const Array &p_frames, const String &p_p
         frames.write[i] = image_from_any(p_frames[i]);
     }
     return encode_internal(frames, p_path, r_bytes);
+}
+
+String FFmpegVideoEncoder::get_codec_name() const {
+    return codec_name;
+}
+
+String FFmpegVideoEncoder::get_pixel_format() const {
+    return pixel_format_to_string(target_pix_fmt);
+}
+
+int FFmpegVideoEncoder::get_frame_rate() const {
+    return frame_rate;
+}
+
+void FFmpegVideoEncoder::set_resolution_vec(const Vector2i &p_size) {
+    set_resolution(p_size.x, p_size.y);
+}
+
+Vector2i FFmpegVideoEncoder::get_resolution() const {
+    return Vector2i(width, height);
+}
+
+int64_t FFmpegVideoEncoder::get_bit_rate() const {
+    return bit_rate;
+}
+
+String FFmpegVideoEncoder::get_rate_control_mode() const {
+    return rate_control_mode;
+}
+
+int FFmpegVideoEncoder::get_quality() const {
+    return quality;
+}
+
+String FFmpegVideoEncoder::get_preset() const {
+    return preset;
+}
+
+String FFmpegVideoEncoder::get_profile() const {
+    return profile;
+}
+
+int FFmpegVideoEncoder::get_keyframe_interval() const {
+    return keyframe_interval;
 }
 
 } // namespace godot

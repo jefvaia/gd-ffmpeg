@@ -42,6 +42,11 @@ static void apply_option_to_target(void *p_target, const char *p_key, const Vari
     }
 }
 
+// Convert an Array of frames into interleaved PCM.
+// To avoid AudioFrame (which your bindings don't have), we accept:
+//  - Dictionary { "left": float, "right": float }
+//  - Array [left, right]
+//  - Single number (mono)
 static PackedFloat32Array frames_to_pcm(const Array &p_frames, int p_channels) {
     PackedFloat32Array pcm;
     if (p_channels <= 0) {
@@ -50,22 +55,49 @@ static PackedFloat32Array frames_to_pcm(const Array &p_frames, int p_channels) {
 
     pcm.resize(p_frames.size() * p_channels);
     float *dst = pcm.ptrw();
+
     for (int i = 0; i < p_frames.size(); i++) {
         const Variant &v = p_frames[i];
-        if (v.get_type() == Variant::AUDIO_FRAME) {
-            const AudioFrame af = v;
-            const float left = af.left;
-            const float right = af.right;
-            const int base = i * p_channels;
-            dst[base] = left;
-            if (p_channels > 1) {
-                dst[base + 1] = p_channels > 1 ? right : left;
-            }
+        float left = 0.0f;
+        float right = 0.0f;
+
+        switch (v.get_type()) {
+            case Variant::DICTIONARY: {
+                Dictionary d = v;
+                left = d.has("left") ? float(double(d["left"])) : 0.0f;
+                right = d.has("right") ? float(double(d["right"])) : left;
+            } break;
+            case Variant::ARRAY: {
+                Array a = v;
+                if (a.size() > 0) {
+                    left = float(double(a[0]));
+                }
+                if (a.size() > 1) {
+                    right = float(double(a[1]));
+                } else {
+                    right = left;
+                }
+            } break;
+            case Variant::FLOAT:
+            case Variant::INT: {
+                left = float(double(v));
+                right = left;
+            } break;
+            default:
+                left = right = 0.0f;
+                break;
+        }
+
+        const int base = i * p_channels;
+        dst[base] = left;
+        if (p_channels > 1) {
+            dst[base + 1] = right;
         }
     }
     return pcm;
 }
 
+// Convert AudioStreamWAV to float32 PCM (interleaved)
 static PackedFloat32Array audio_stream_to_pcm(const Ref<AudioStream> &p_stream, int *r_sample_rate, int *r_channels) {
     PackedFloat32Array pcm;
     if (p_stream.is_null()) {
@@ -105,12 +137,8 @@ static PackedFloat32Array audio_stream_to_pcm(const Ref<AudioStream> &p_stream, 
         for (int i = 0; i < samples; i++) {
             dst[i] = (static_cast<int>(src[i]) - 128) / 128.0f;
         }
-    } else if (fmt == AudioStreamWAV::FORMAT_32_BITS) {
-        const float *src = reinterpret_cast<const float *>(data.ptr());
-        const int samples = data.size() / static_cast<int>(sizeof(float));
-        pcm.resize(samples);
-        memcpy(pcm.ptrw(), src, samples * sizeof(float));
     } else {
+        // No FORMAT_32_BITS in your bindings – treat others as unsupported.
         UtilityFunctions::printerr("[FFmpegAudioEncoder] Unsupported AudioStreamWAV format for encoding");
     }
 
@@ -201,8 +229,9 @@ int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_r
     int target_bit_rate = p_bit_rate;
     if (p_options.has("bit_rate")) {
         const Variant opt_br = p_options["bit_rate"];
-        if (opt_br.is_num()) {
-            target_bit_rate = static_cast<int>(opt_br);
+        const Variant::Type t = opt_br.get_type();
+        if (t == Variant::INT || t == Variant::FLOAT) {
+            target_bit_rate = static_cast<int>(double(opt_br));
         }
     }
 
@@ -217,8 +246,12 @@ int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_r
     }
 
     int quality = -1;
-    if (p_options.has("quality") && Variant(p_options["quality"]).is_num()) {
-        quality = static_cast<int>(p_options["quality"]);
+    if (p_options.has("quality")) {
+        Variant vq = p_options["quality"];
+        const Variant::Type qt = vq.get_type();
+        if (qt == Variant::INT || qt == Variant::FLOAT) {
+            quality = static_cast<int>(double(vq));
+        }
     }
 
     const String profile = p_options.has("profile") ? String(p_options["profile"]) : String();
@@ -244,26 +277,52 @@ int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_r
     codec_ctx->bit_rate = target_bit_rate;
 
     // ---------- Channel layout (FFmpeg 5+/8 style: AVChannelLayout) ----------
-    // Set codec_ctx->ch_layout, not codec_ctx->channels / channel_layout.
     if (channels == 1) {
         codec_ctx->ch_layout = AV_CHANNEL_LAYOUT_MONO;
     } else if (channels == 2) {
         codec_ctx->ch_layout = AV_CHANNEL_LAYOUT_STEREO;
     } else {
-        // Simple, safe behavior: only support mono/stereo for now.
         log_ffmpeg("Only mono and stereo channel layouts are supported in this example");
         return 4;
     }
 
-    // ---------- Sample format (simplified, FFmpeg 8) ----------
+    // ---------- Sample format (prefer float formats we implement) ----------
     if (codec->sample_fmts && codec->sample_fmts[0] != AV_SAMPLE_FMT_NONE) {
-        // Just use the first supported format the encoder reports.
-        sample_fmt = codec->sample_fmts[0];
+        AVSampleFormat chosen = AV_SAMPLE_FMT_NONE;
+
+        // First: look for planar float
+        const AVSampleFormat *p = codec->sample_fmts;
+        while (*p != AV_SAMPLE_FMT_NONE) {
+            if (*p == AV_SAMPLE_FMT_FLTP) {
+                chosen = *p;
+                break;
+            }
+            p++;
+        }
+
+        // Second: look for interleaved float
+        if (chosen == AV_SAMPLE_FMT_NONE) {
+            p = codec->sample_fmts;
+            while (*p != AV_SAMPLE_FMT_NONE) {
+                if (*p == AV_SAMPLE_FMT_FLT) {
+                    chosen = *p;
+                    break;
+                }
+                p++;
+            }
+        }
+
+        // Fallback: first available
+        if (chosen == AV_SAMPLE_FMT_NONE) {
+            chosen = codec->sample_fmts[0];
+        }
+
+        sample_fmt = chosen;
         log_ffmpeg("Using encoder sample format: " + String::num_int64(sample_fmt));
     } else {
-        // Fallback: float32 interleaved (may or may not be supported by every encoder)
-        sample_fmt = AV_SAMPLE_FMT_FLT;
-        log_ffmpeg("Encoder did not report sample_fmts; assuming AV_SAMPLE_FMT_FLT");
+        // Encoder did not report formats; assume planar float
+        sample_fmt = AV_SAMPLE_FMT_FLTP;
+        log_ffmpeg("Encoder did not report sample_fmts; assuming AV_SAMPLE_FMT_FLTP");
     }
 
     codec_ctx->sample_fmt = sample_fmt;
@@ -285,7 +344,6 @@ int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_r
     } else {
         apply_option_to_encoder(codec_ctx, "vbr", false);
     }
-
 
     // Open encoder
     if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
@@ -331,80 +389,100 @@ PackedByteArray FFmpegAudioEncoder::encode(const PackedFloat32Array &p_pcm_inter
     }
 
     const int total_samples = total_floats / channels;
-    if (total_samples <= 0) {
-        return output;
+
+    // Determine a reasonable frame size
+    int frame_size = codec_ctx->frame_size;
+    if (frame_size <= 0) {
+        // Some encoders report 0 for variable frame size; pick a chunk size.
+        frame_size = 1024;
     }
 
-    // Configure frame
-    frame->nb_samples  = total_samples;
-    frame->format      = codec_ctx->sample_fmt;
+    // Allocate frame buffers for the maximum chunk size
+    frame->nb_samples = frame_size;
+    frame->format = codec_ctx->sample_fmt;
     frame->sample_rate = codec_ctx->sample_rate;
-    frame->ch_layout   = codec_ctx->ch_layout;
+    frame->ch_layout = codec_ctx->ch_layout;
 
     if (av_frame_get_buffer(frame, 0) < 0) {
         log_ffmpeg("Failed to allocate frame buffer");
         return output;
     }
 
-    if (av_frame_make_writable(frame) < 0) {
-        log_ffmpeg("Frame not writable");
-        av_frame_unref(frame);
-        return output;
-    }
-
     const float *src = p_pcm_interleaved.ptr();
+    int sample_pos = 0;
 
-    // ---------- Fill frame depending on sample format ----------
-    if (sample_fmt == AV_SAMPLE_FMT_FLT) {
-        // Interleaved float: data[0] holds all channels interleaved.
-        float *dst = reinterpret_cast<float *>(frame->data[0]);
-        const int samples_interleaved = total_samples * channels;
-        std::memcpy(dst, src, samples_interleaved * sizeof(float));
+    while (sample_pos < total_samples) {
+        const int remaining = total_samples - sample_pos;
+        const int nb = remaining < frame_size ? remaining : frame_size;
 
-    } else if (sample_fmt == AV_SAMPLE_FMT_FLTP) {
-        // Planar float: data[c] contains all samples for channel c.
-        for (int s = 0; s < total_samples; ++s) {
+        if (av_frame_make_writable(frame) < 0) {
+            log_ffmpeg("Frame not writable");
+            av_frame_unref(frame);
+            break;
+        }
+
+        // Actual number of samples we are sending this iteration
+        frame->nb_samples = nb;
+
+        if (sample_fmt == AV_SAMPLE_FMT_FLT) {
+            // Interleaved float: [L,R,L,R,...]
+            float *dst = reinterpret_cast<float *>(frame->data[0]);
+            const int samples_interleaved = nb * channels;
+            const int src_offset = sample_pos * channels;
+            std::memcpy(
+                dst,
+                src + src_offset,
+                samples_interleaved * sizeof(float)
+            );
+        } else if (sample_fmt == AV_SAMPLE_FMT_FLTP) {
+            // Planar float: data[c] is a separate plane
             for (int c = 0; c < channels; ++c) {
                 float *dst_ch = reinterpret_cast<float *>(frame->data[c]);
-                const int src_index = s * channels + c;
-                dst_ch[s] = src[src_index];
+                for (int s = 0; s < nb; ++s) {
+                    const int src_index = (sample_pos + s) * channels + c;
+                    dst_ch[s] = src[src_index];
+                }
             }
+        } else {
+            log_ffmpeg("Only FLT and FLTP formats are implemented in this example");
+            av_frame_unref(frame);
+            return output;
         }
 
-    } else {
-        log_ffmpeg("Only FLT and FLTP formats are implemented in this example");
-        av_frame_unref(frame);
-        return output;
-    }
-
-    // ---------- Send frame to encoder ----------
-    int ret = avcodec_send_frame(codec_ctx, frame);
-    if (ret < 0) {
-        log_ffmpeg("Error sending frame to encoder");
-        av_frame_unref(frame);
-        return output;
-    }
-
-    // Read all available packets
-    while (ret >= 0) {
-        ret = avcodec_receive_packet(codec_ctx, packet);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            break;
-        } else if (ret < 0) {
-            log_ffmpeg("Error receiving packet from encoder");
+        // Send frame
+        int ret = avcodec_send_frame(codec_ctx, frame);
+        if (ret < 0) {
+            log_ffmpeg("Error sending frame to encoder");
+            av_frame_unref(frame);
             break;
         }
 
-        const int old_size = output.size();
-        output.resize(old_size + packet->size);
-        std::memcpy(output.ptrw() + old_size, packet->data, packet->size);
+        // Read all available packets after this frame
+        while (ret >= 0) {
+            ret = avcodec_receive_packet(codec_ctx, packet);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                break;
+            } else if (ret < 0) {
+                log_ffmpeg("Error receiving packet from encoder");
+                break;
+            }
 
-        av_packet_unref(packet);
+            if (packet->size > 0 && packet->data) {
+                const int old_size = output.size();
+                output.resize(old_size + packet->size);
+                std::memcpy(output.ptrw() + old_size, packet->data, packet->size);
+            }
+
+            av_packet_unref(packet);
+        }
+
+        sample_pos += nb;
     }
 
     av_frame_unref(frame);
     return output;
 }
+
 
 PackedByteArray FFmpegAudioEncoder::encode_audio_frames(const Array &p_frames) {
     PackedFloat32Array pcm = frames_to_pcm(p_frames, channels);
@@ -429,9 +507,8 @@ PackedByteArray FFmpegAudioEncoder::encode_audio_stream(const Ref<AudioStream> &
 }
 
 static int write_bytes_to_file(const PackedByteArray &p_bytes, const String &p_path) {
-    Error err = OK;
-    Ref<FileAccess> file = FileAccess::open(p_path, FileAccess::WRITE, &err);
-    if (err != OK || file.is_null()) {
+    Ref<FileAccess> file = FileAccess::open(p_path, FileAccess::WRITE);
+    if (file.is_null()) {
         UtilityFunctions::printerr("[FFmpegAudioEncoder] Could not open file: " + p_path);
         return 1;
     }
@@ -468,30 +545,27 @@ int FFmpegAudioEncoder::encode_audio_stream_to_file(const Ref<AudioStream> &p_st
 
 PackedByteArray FFmpegAudioEncoder::flush() {
     PackedByteArray output;
-
     if (!initialized || !codec_ctx || !packet) {
         return output;
     }
 
     int ret = avcodec_send_frame(codec_ctx, nullptr);
-    if (ret < 0 && ret != AVERROR_EOF) {
-        log_ffmpeg("Error sending flush frame");
+    if (ret < 0) {
         return output;
     }
 
     while (true) {
         ret = avcodec_receive_packet(codec_ctx, packet);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+        if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) {
             break;
-        } else if (ret < 0) {
-            log_ffmpeg("Error receiving packet during flush");
+        }
+        if (ret < 0) {
             break;
         }
 
         const int old_size = output.size();
         output.resize(old_size + packet->size);
         std::memcpy(output.ptrw() + old_size, packet->data, packet->size);
-
         av_packet_unref(packet);
     }
 

@@ -18,14 +18,13 @@ ffmpeg_lib     = os.path.join(FFMPEG_ROOT, "lib")
 env.Append(CPPPATH=[ffmpeg_include])
 env.Append(LIBPATH=[ffmpeg_lib])
 
-# FFmpeg libs (audio + video)
+# FFmpeg libs (now includes avformat + swscale)
 env.Append(LIBS=[
-    "avformat",
-    "avfilter",
-    "swscale",
-    "swresample",
     "avcodec",
     "avutil",
+    "swresample",
+    "avformat",
+    "swscale",
 ])
 
 if env["platform"] == "windows":

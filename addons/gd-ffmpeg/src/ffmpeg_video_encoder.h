@@ -45,15 +45,35 @@ protected:
 
 public:
     void set_codec_name(const String &p_name);
+    String get_codec_name() const;
+
     void set_pixel_format(const String &p_name);
+    String get_pixel_format() const;
+
     void set_frame_rate(int p_rate);
+    int get_frame_rate() const;
+
     void set_resolution(int p_width, int p_height);
+    void set_resolution_vec(const Vector2i &p_size);
+    Vector2i get_resolution() const;
+
     void set_bit_rate(int64_t p_bit_rate);
+    int64_t get_bit_rate() const;
+
     void set_rate_control_mode(const String &p_mode);
+    String get_rate_control_mode() const;
+
     void set_quality(int p_quality);
+    int get_quality() const;
+
     void set_preset(const String &p_preset);
+    String get_preset() const;
+
     void set_profile(const String &p_profile);
+    String get_profile() const;
+
     void set_keyframe_interval(int p_interval);
+    int get_keyframe_interval() const;
 
     // Encode an array of Image or ImageTexture frames into a video file.
     // Returns 0 on success.

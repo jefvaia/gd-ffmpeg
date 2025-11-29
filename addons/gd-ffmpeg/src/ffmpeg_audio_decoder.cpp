@@ -7,7 +7,6 @@
 #include <godot_cpp/core/math.hpp>
 
 #include <algorithm>
-
 #include <cstring>
 
 namespace godot {
@@ -97,12 +96,24 @@ int FFmpegAudioDecoder::setup_resampler(const AVChannelLayout &p_src_layout) {
         } else if (target_channels == 2) {
             dst_layout = AV_CHANNEL_LAYOUT_STEREO;
         }
+        // (you can add more layouts later if needed)
     }
 
     const int dst_rate = target_sample_rate > 0 ? target_sample_rate : codec_ctx->sample_rate;
 
-    swr_ctx = swr_alloc_set_opts2(nullptr, &dst_layout, target_format, dst_rate, &p_src_layout, codec_ctx->sample_fmt, codec_ctx->sample_rate, 0, nullptr);
-    if (!swr_ctx) {
+    // New FFmpeg 5+/8 style: swr_alloc_set_opts2 returns int and takes SwrContext**
+    int ret = swr_alloc_set_opts2(
+        &swr_ctx,
+        &dst_layout,
+        target_format,
+        dst_rate,
+        &p_src_layout,
+        codec_ctx->sample_fmt,
+        codec_ctx->sample_rate,
+        0,
+        nullptr
+    );
+    if (ret < 0 || !swr_ctx) {
         return 2;
     }
 
@@ -116,23 +127,6 @@ int FFmpegAudioDecoder::setup_resampler(const AVChannelLayout &p_src_layout) {
     return 0;
 }
 
-static int read_packet(void *opaque, uint8_t *buf, int buf_size) {
-    FFmpegAudioDecoder *self = reinterpret_cast<FFmpegAudioDecoder *>(opaque);
-    if (!self) {
-        return AVERROR(EIO);
-    }
-    const PackedByteArray &bytes = self->source_bytes;
-    if (self->source_pos >= static_cast<size_t>(bytes.size())) {
-        return AVERROR_EOF;
-    }
-
-    const int remaining = bytes.size() - static_cast<int>(self->source_pos);
-    const int to_copy = std::min(buf_size, remaining);
-    std::memcpy(buf, bytes.ptr() + self->source_pos, to_copy);
-    self->source_pos += to_copy;
-    return to_copy;
-}
-
 int FFmpegAudioDecoder::open_input_internal(const char *p_path) {
     if (!format_ctx) {
         format_ctx = avformat_alloc_context();
@@ -141,7 +135,15 @@ int FFmpegAudioDecoder::open_input_internal(const char *p_path) {
     if (!source_bytes.is_empty()) {
         const int avio_buffer_size = 4096;
         unsigned char *avio_buffer = static_cast<unsigned char *>(av_malloc(avio_buffer_size));
-        avio_ctx = avio_alloc_context(avio_buffer, avio_buffer_size, 0, this, &read_packet, nullptr, nullptr);
+        avio_ctx = avio_alloc_context(
+    avio_buffer,
+    avio_buffer_size,
+    0,
+    this,
+    &FFmpegAudioDecoder::read_packet,
+    nullptr,
+    nullptr
+);
         format_ctx->pb = avio_ctx;
         format_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
     }
@@ -172,7 +174,7 @@ int FFmpegAudioDecoder::open_input_internal(const char *p_path) {
     // locate audio stream
     for (unsigned int i = 0; i < format_ctx->nb_streams; i++) {
         if (format_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            audio_stream_index = i;
+            audio_stream_index = static_cast<int>(i);
             if (!codec) {
                 codec = avcodec_find_decoder(format_ctx->streams[i]->codecpar->codec_id);
             }
@@ -258,16 +260,33 @@ PackedFloat32Array FFmpegAudioDecoder::decode_pcm() {
             }
 
             const int dst_nb_channels = target_channels > 0 ? target_channels : frame->ch_layout.nb_channels;
-            const int dst_nb_samples = av_rescale_rnd(swr_get_delay(swr_ctx, frame->sample_rate) + frame->nb_samples, target_sample_rate, frame->sample_rate, AV_ROUND_UP);
+            const int dst_nb_samples = av_rescale_rnd(
+                swr_get_delay(swr_ctx, frame->sample_rate) + frame->nb_samples,
+                target_sample_rate,
+                frame->sample_rate,
+                AV_ROUND_UP
+            );
 
             int out_linesize = 0;
             float *out_buffer = nullptr;
-            if (av_samples_alloc(reinterpret_cast<uint8_t **>(&out_buffer), &out_linesize, dst_nb_channels, dst_nb_samples, AV_SAMPLE_FMT_FLT, 0) < 0) {
+            if (av_samples_alloc(
+                    reinterpret_cast<uint8_t **>(&out_buffer),
+                    &out_linesize,
+                    dst_nb_channels,
+                    dst_nb_samples,
+                    AV_SAMPLE_FMT_FLT,
+                    0) < 0) {
                 log_ffmpeg_dec("Failed to allocate output samples");
                 break;
             }
 
-            const int converted = swr_convert(swr_ctx, reinterpret_cast<uint8_t **>(&out_buffer), dst_nb_samples, const_cast<const uint8_t **>(frame->extended_data), frame->nb_samples);
+            const int converted = swr_convert(
+                swr_ctx,
+                reinterpret_cast<uint8_t **>(&out_buffer),
+                dst_nb_samples,
+                const_cast<const uint8_t **>(frame->extended_data),
+                frame->nb_samples
+            );
             const int samples_written = converted * dst_nb_channels;
             const int old_size = pcm.size();
             pcm.resize(old_size + samples_written);
@@ -291,15 +310,32 @@ PackedFloat32Array FFmpegAudioDecoder::decode_pcm() {
             }
 
             const int dst_nb_channels = target_channels > 0 ? target_channels : frame->ch_layout.nb_channels;
-            const int dst_nb_samples = av_rescale_rnd(swr_get_delay(swr_ctx, frame->sample_rate) + frame->nb_samples, target_sample_rate, frame->sample_rate, AV_ROUND_UP);
+            const int dst_nb_samples = av_rescale_rnd(
+                swr_get_delay(swr_ctx, frame->sample_rate) + frame->nb_samples,
+                target_sample_rate,
+                frame->sample_rate,
+                AV_ROUND_UP
+            );
 
             int out_linesize = 0;
             float *out_buffer = nullptr;
-            if (av_samples_alloc(reinterpret_cast<uint8_t **>(&out_buffer), &out_linesize, dst_nb_channels, dst_nb_samples, AV_SAMPLE_FMT_FLT, 0) < 0) {
+            if (av_samples_alloc(
+                    reinterpret_cast<uint8_t **>(&out_buffer),
+                    &out_linesize,
+                    dst_nb_channels,
+                    dst_nb_samples,
+                    AV_SAMPLE_FMT_FLT,
+                    0) < 0) {
                 break;
             }
 
-            const int converted = swr_convert(swr_ctx, reinterpret_cast<uint8_t **>(&out_buffer), dst_nb_samples, const_cast<const uint8_t **>(frame->extended_data), frame->nb_samples);
+            const int converted = swr_convert(
+                swr_ctx,
+                reinterpret_cast<uint8_t **>(&out_buffer),
+                dst_nb_samples,
+                const_cast<const uint8_t **>(frame->extended_data),
+                frame->nb_samples
+            );
             const int samples_written = converted * dst_nb_channels;
             const int old_size = pcm.size();
             pcm.resize(old_size + samples_written);
@@ -317,10 +353,14 @@ Array FFmpegAudioDecoder::decode_audio_frames() {
     Array frames;
     PackedFloat32Array pcm = decode_pcm();
     const int ch = target_channels > 0 ? target_channels : 2;
+
+    // We now return an Array of Dictionary { "left": float, "right": float }
     for (int i = 0; i + ch - 1 < pcm.size(); i += ch) {
-        AudioFrame f;
-        f.left = pcm[i];
-        f.right = ch > 1 ? pcm[i + 1] : pcm[i];
+        Dictionary f;
+        const float left = pcm[i];
+        const float right = (ch > 1) ? pcm[i + 1] : left;
+        f["left"] = left;
+        f["right"] = right;
         frames.push_back(f);
     }
     return frames;
@@ -439,14 +479,32 @@ int FFmpegAudioTranscoder::transcode_file(const String &p_input_path, const Stri
     PackedByteArray tail = encoder->flush();
     encoded.append_array(tail);
 
-    Error err = OK;
-    Ref<FileAccess> file = FileAccess::open(p_output_path, FileAccess::WRITE, &err);
-    if (err != OK || file.is_null()) {
+    // FileAccess::open only takes (path, mode) in your binding: fix here
+    Ref<FileAccess> file = FileAccess::open(p_output_path, FileAccess::WRITE);
+    if (file.is_null()) {
         log_ffmpeg_dec("Could not open output file for writing");
         return 3;
     }
     file->store_buffer(encoded);
     return 0;
 }
+
+int FFmpegAudioDecoder::read_packet(void *opaque, uint8_t *buf, int buf_size) {
+    FFmpegAudioDecoder *self = reinterpret_cast<FFmpegAudioDecoder *>(opaque);
+    if (!self) {
+        return AVERROR(EIO);
+    }
+    const PackedByteArray &bytes = self->source_bytes;
+    if (self->source_pos >= static_cast<size_t>(bytes.size())) {
+        return AVERROR_EOF;
+    }
+
+    const int remaining = bytes.size() - static_cast<int>(self->source_pos);
+    const int to_copy = std::min(buf_size, remaining);
+    std::memcpy(buf, bytes.ptr() + self->source_pos, to_copy);
+    self->source_pos += to_copy;
+    return to_copy;
+}
+
 
 } // namespace godot
