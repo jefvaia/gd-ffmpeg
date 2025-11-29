@@ -147,6 +147,9 @@ Ref<Image> FFmpegVideoEncoder::image_from_any(const Variant &p_value) {
             if (Image *raw = Object::cast_to<Image>(obj)) {
                 return Ref<Image>(raw);
             }
+            if (Texture2D *base_tex = Object::cast_to<Texture2D>(obj)) {
+                return base_tex->get_image();
+            }
             if (ImageTexture *tex = Object::cast_to<ImageTexture>(obj)) {
                 return tex->get_image();
             }

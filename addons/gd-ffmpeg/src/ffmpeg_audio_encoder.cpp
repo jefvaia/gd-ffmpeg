@@ -2,6 +2,8 @@
 
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/variant/variant.hpp>
+#include <godot_cpp/classes/file_access.hpp>
+
 #include <cstring>
 
 namespace godot {
@@ -38,6 +40,81 @@ static void apply_option_to_target(void *p_target, const char *p_key, const Vari
         av_strerror(err, err_buf, sizeof(err_buf));
         log_ffmpeg("Could not apply option '" + String(p_key) + "' (" + String(err_buf) + ")");
     }
+}
+
+static PackedFloat32Array frames_to_pcm(const Array &p_frames, int p_channels) {
+    PackedFloat32Array pcm;
+    if (p_channels <= 0) {
+        return pcm;
+    }
+
+    pcm.resize(p_frames.size() * p_channels);
+    float *dst = pcm.ptrw();
+    for (int i = 0; i < p_frames.size(); i++) {
+        const Variant &v = p_frames[i];
+        if (v.get_type() == Variant::AUDIO_FRAME) {
+            const AudioFrame af = v;
+            const float left = af.left;
+            const float right = af.right;
+            const int base = i * p_channels;
+            dst[base] = left;
+            if (p_channels > 1) {
+                dst[base + 1] = p_channels > 1 ? right : left;
+            }
+        }
+    }
+    return pcm;
+}
+
+static PackedFloat32Array audio_stream_to_pcm(const Ref<AudioStream> &p_stream, int *r_sample_rate, int *r_channels) {
+    PackedFloat32Array pcm;
+    if (p_stream.is_null()) {
+        return pcm;
+    }
+
+    AudioStreamWAV *wav = Object::cast_to<AudioStreamWAV>(p_stream.ptr());
+    if (!wav) {
+        UtilityFunctions::printerr("[FFmpegAudioEncoder] Only AudioStreamWAV is supported for direct encoding");
+        return pcm;
+    }
+
+    const PackedByteArray data = wav->get_data();
+    const int sr = wav->get_mix_rate();
+    const int channels = wav->is_stereo() ? 2 : 1;
+    if (r_sample_rate) {
+        *r_sample_rate = sr;
+    }
+    if (r_channels) {
+        *r_channels = channels;
+    }
+
+    const AudioStreamWAV::Format fmt = wav->get_format();
+    if (fmt == AudioStreamWAV::FORMAT_16_BITS) {
+        const int16_t *src = reinterpret_cast<const int16_t *>(data.ptr());
+        const int samples = data.size() / static_cast<int>(sizeof(int16_t));
+        pcm.resize(samples);
+        float *dst = pcm.ptrw();
+        for (int i = 0; i < samples; i++) {
+            dst[i] = static_cast<float>(src[i]) / 32768.0f;
+        }
+    } else if (fmt == AudioStreamWAV::FORMAT_8_BITS) {
+        const int samples = data.size();
+        pcm.resize(samples);
+        float *dst = pcm.ptrw();
+        const uint8_t *src = data.ptr();
+        for (int i = 0; i < samples; i++) {
+            dst[i] = (static_cast<int>(src[i]) - 128) / 128.0f;
+        }
+    } else if (fmt == AudioStreamWAV::FORMAT_32_BITS) {
+        const float *src = reinterpret_cast<const float *>(data.ptr());
+        const int samples = data.size() / static_cast<int>(sizeof(float));
+        pcm.resize(samples);
+        memcpy(pcm.ptrw(), src, samples * sizeof(float));
+    } else {
+        UtilityFunctions::printerr("[FFmpegAudioEncoder] Unsupported AudioStreamWAV format for encoding");
+    }
+
+    return pcm;
 }
 
 static void apply_option_to_encoder(AVCodecContext *p_ctx, const char *p_key, const Variant &p_value) {
@@ -78,6 +155,26 @@ void FFmpegAudioEncoder::_bind_methods() {
     ClassDB::bind_method(
         D_METHOD("encode", "pcm_interleaved"),
         &FFmpegAudioEncoder::encode
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_audio_frames", "frames"),
+        &FFmpegAudioEncoder::encode_audio_frames
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_audio_stream", "stream"),
+        &FFmpegAudioEncoder::encode_audio_stream
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_pcm_to_file", "pcm_interleaved", "path"),
+        &FFmpegAudioEncoder::encode_pcm_to_file
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_audio_frames_to_file", "frames", "path"),
+        &FFmpegAudioEncoder::encode_audio_frames_to_file
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_audio_stream_to_file", "stream", "path"),
+        &FFmpegAudioEncoder::encode_audio_stream_to_file
     );
     ClassDB::bind_method(
         D_METHOD("flush"),
@@ -307,6 +404,66 @@ PackedByteArray FFmpegAudioEncoder::encode(const PackedFloat32Array &p_pcm_inter
 
     av_frame_unref(frame);
     return output;
+}
+
+PackedByteArray FFmpegAudioEncoder::encode_audio_frames(const Array &p_frames) {
+    PackedFloat32Array pcm = frames_to_pcm(p_frames, channels);
+    return encode(pcm);
+}
+
+PackedByteArray FFmpegAudioEncoder::encode_audio_stream(const Ref<AudioStream> &p_stream) {
+    int stream_rate = 0;
+    int stream_channels = 0;
+    PackedFloat32Array pcm = audio_stream_to_pcm(p_stream, &stream_rate, &stream_channels);
+
+    if (pcm.is_empty()) {
+        return PackedByteArray();
+    }
+
+    if ((stream_rate > 0 && stream_rate != sample_rate) || (stream_channels > 0 && stream_channels != channels)) {
+        UtilityFunctions::printerr("[FFmpegAudioEncoder] AudioStream format does not match encoder setup");
+        return PackedByteArray();
+    }
+
+    return encode(pcm);
+}
+
+static int write_bytes_to_file(const PackedByteArray &p_bytes, const String &p_path) {
+    Error err = OK;
+    Ref<FileAccess> file = FileAccess::open(p_path, FileAccess::WRITE, &err);
+    if (err != OK || file.is_null()) {
+        UtilityFunctions::printerr("[FFmpegAudioEncoder] Could not open file: " + p_path);
+        return 1;
+    }
+    file->store_buffer(p_bytes);
+    return 0;
+}
+
+int FFmpegAudioEncoder::encode_pcm_to_file(const PackedFloat32Array &p_pcm_interleaved, const String &p_path) {
+    PackedByteArray data = encode(p_pcm_interleaved);
+    data.append_array(flush());
+    if (data.is_empty()) {
+        return 1;
+    }
+    return write_bytes_to_file(data, p_path);
+}
+
+int FFmpegAudioEncoder::encode_audio_frames_to_file(const Array &p_frames, const String &p_path) {
+    PackedByteArray data = encode_audio_frames(p_frames);
+    data.append_array(flush());
+    if (data.is_empty()) {
+        return 1;
+    }
+    return write_bytes_to_file(data, p_path);
+}
+
+int FFmpegAudioEncoder::encode_audio_stream_to_file(const Ref<AudioStream> &p_stream, const String &p_path) {
+    PackedByteArray data = encode_audio_stream(p_stream);
+    data.append_array(flush());
+    if (data.is_empty()) {
+        return 1;
+    }
+    return write_bytes_to_file(data, p_path);
 }
 
 PackedByteArray FFmpegAudioEncoder::flush() {

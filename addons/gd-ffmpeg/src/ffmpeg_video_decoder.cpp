@@ -22,6 +22,10 @@ void FFmpegVideoDecoder::_bind_methods() {
     ClassDB::bind_method(D_METHOD("load_bytes", "data"), &FFmpegVideoDecoder::load_bytes);
     ClassDB::bind_method(D_METHOD("decode_frames"), &FFmpegVideoDecoder::decode_frames);
     ClassDB::bind_method(D_METHOD("decode_frame_bytes"), &FFmpegVideoDecoder::decode_frame_bytes);
+    ClassDB::bind_method(D_METHOD("decode_textures"), &FFmpegVideoDecoder::decode_textures);
+    ClassDB::bind_method(D_METHOD("decode_frames_from_file", "path"), &FFmpegVideoDecoder::decode_frames_from_file);
+    ClassDB::bind_method(D_METHOD("decode_frame_bytes_from_file", "path"), &FFmpegVideoDecoder::decode_frame_bytes_from_file);
+    ClassDB::bind_method(D_METHOD("decode_textures_from_file", "path"), &FFmpegVideoDecoder::decode_textures_from_file);
 
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "preferred_codec"), "set_preferred_codec", String());
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "output_pixel_format"), "set_output_pixel_format", String());
@@ -336,6 +340,48 @@ Array FFmpegVideoDecoder::decode_frame_bytes() {
         }
     }
     return frames;
+}
+
+Array FFmpegVideoDecoder::decode_textures() {
+    Array textures;
+    Array images = decode_frames();
+    for (int i = 0; i < images.size(); i++) {
+        Ref<Image> img = images[i];
+        if (img.is_valid()) {
+            Ref<ImageTexture> tex = ImageTexture::create_from_image(img);
+            if (tex.is_valid()) {
+                textures.append(tex);
+            }
+        }
+    }
+    return textures;
+}
+
+Array FFmpegVideoDecoder::decode_frames_from_file(const String &p_path) {
+    if (load_file(p_path) != 0) {
+        return Array();
+    }
+    Array frames = decode_frames();
+    clear_resources();
+    return frames;
+}
+
+Array FFmpegVideoDecoder::decode_frame_bytes_from_file(const String &p_path) {
+    if (load_file(p_path) != 0) {
+        return Array();
+    }
+    Array frames = decode_frame_bytes();
+    clear_resources();
+    return frames;
+}
+
+Array FFmpegVideoDecoder::decode_textures_from_file(const String &p_path) {
+    if (load_file(p_path) != 0) {
+        return Array();
+    }
+    Array textures = decode_textures();
+    clear_resources();
+    return textures;
 }
 
 } // namespace godot

@@ -2,6 +2,8 @@
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/classes/audio_stream.hpp>
+#include <godot_cpp/classes/audio_stream_wav.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
@@ -41,6 +43,15 @@ public:
     // Input: interleaved float32 PCM (L, R, L, R, ...) with the same
     // sample rate and channel count passed to setup_encoder.
     PackedByteArray encode(const PackedFloat32Array &p_pcm_interleaved);
+
+    // Convenience overloads for Godot-native data.
+    PackedByteArray encode_audio_frames(const Array &p_frames);
+    PackedByteArray encode_audio_stream(const Ref<AudioStream> &p_stream);
+
+    // File output helpers (muxed by FFmpeg, still exposing raw bytes separately).
+    int encode_pcm_to_file(const PackedFloat32Array &p_pcm_interleaved, const String &p_path);
+    int encode_audio_frames_to_file(const Array &p_frames, const String &p_path);
+    int encode_audio_stream_to_file(const Ref<AudioStream> &p_stream, const String &p_path);
 
     // Flush any remaining buffered data from the encoder.
     PackedByteArray flush();
