@@ -1,2 +1,54 @@
-# Godot 4+ specific ignores
+# Godot caches and editor data
 .godot/
+.import/
+.godot/imported/
+.godot/editor/
+.mono/
+mono_crash.*.json
+
+# Export and build outputs
+export.cfg
+export_presets.cfg.backup
+*.pck
+*.zip
+*.apk
+*.aab
+*.app
+*.exe
+*.dll
+*.dylib
+*.so
+
+# SCons build files
+.sconsign.dblite
+.sconsign.dblite.d
+.sconsign.*
+.sconf_temp/
+cache/
+
+# C/C++ build artifacts
+*.o
+*.obj
+*.lo
+*.la
+*.al
+*.gch
+*.pch
+*.out
+*.a
+*.lib
+*.exp
+*.idb
+*.pdb
+*.exe
+*.dll
+*.so
+*.dylib
+*.dll.a
+*.mod
+*.smod
+
+# Build directories
+bin/
+build/
+dist/
