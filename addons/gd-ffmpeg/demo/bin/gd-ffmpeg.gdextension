@@ -1,0 +1,6 @@
+[configuration]
+entry_symbol = "gdffmpeg_library_init"   # if you rename the entry symbol
+
+[libraries]
+windows.debug.x86_64 = "res://bin/libgd-ffmpeg.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://bin/libgd-ffmpeg.windows.template_release.x86_64.dll"

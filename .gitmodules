@@ -1,0 +1,3 @@
+[submodule "addons/gd-ffmpeg/godot-cpp"]
+	path = addons/gd-ffmpeg/godot-cpp
+	url = https://github.com/godotengine/godot-cpp.git

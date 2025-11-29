@@ -1,0 +1,52 @@
+#!/usr/bin/env python
+import os
+import sys
+
+# Initialize env from godot-cpp SConstruct
+env = SConscript("godot-cpp/SConstruct")
+
+# Your C++ sources live in src/
+env.Append(CPPPATH=["src/"])
+sources = Glob("src/*.cpp")
+
+# ---------- FFmpeg configuration ----------
+PROJECT_ROOT   = os.getcwd()
+FFMPEG_ROOT    = os.path.join(PROJECT_ROOT, "ffmpeg")
+ffmpeg_include = os.path.join(FFMPEG_ROOT, "include")
+ffmpeg_lib     = os.path.join(FFMPEG_ROOT, "lib")
+
+env.Append(CPPPATH=[ffmpeg_include])
+env.Append(LIBPATH=[ffmpeg_lib])
+
+# Minimal set of FFmpeg libs for audio encode
+env.Append(LIBS=[
+    "avcodec",
+    "avutil",
+    "swresample",
+])
+
+if env["platform"] == "windows":
+    # Common extra system libs for FFmpeg on Windows
+    env.Append(LIBS=["ws2_32", "bcrypt"])
+
+if env["platform"] in ("linux", "macos"):
+    # Make runtime FFmpeg .so/.dylib next to our .so discoverable
+    env.Append(LINKFLAGS=["-Wl,-rpath,$ORIGIN"])
+
+# ---------- Build shared library into demo/bin ----------
+# env["suffix"] is like: ".windows.template_debug.x86_64"
+# env["SHLIBSUFFIX"] is ".dll" / ".so" / ".dylib"
+if env["platform"] == "macos":
+    library = env.SharedLibrary(
+        "demo/bin/libgd-ffmpeg.{}.{}.framework/libgd-ffmpeg.{}.{}".format(
+            env["platform"], env["target"], env["platform"], env["target"]
+        ),
+        source=sources,
+    )
+else:
+    library = env.SharedLibrary(
+        "demo/bin/libgd-ffmpeg{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+        source=sources,
+    )
+
+Default(library)
