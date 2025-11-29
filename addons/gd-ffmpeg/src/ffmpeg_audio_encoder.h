@@ -2,6 +2,7 @@
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 
@@ -9,6 +10,7 @@ extern "C" {
     #include <libavcodec/avcodec.h>
     #include <libavutil/opt.h>
     #include <libavutil/channel_layout.h>
+    #include <libavutil/error.h>
 }
 
 namespace godot {
@@ -34,7 +36,7 @@ public:
     ~FFmpegAudioEncoder();
 
     // Returns 0 on success, non-zero on error.
-    int setup_encoder(const String &p_codec_name, int p_sample_rate, int p_channels, int p_bit_rate);
+    int setup_encoder(const String &p_codec_name, int p_sample_rate, int p_channels, int p_bit_rate, const Dictionary &p_options = Dictionary());
 
     // Input: interleaved float32 PCM (L, R, L, R, ...) with the same
     // sample rate and channel count passed to setup_encoder.

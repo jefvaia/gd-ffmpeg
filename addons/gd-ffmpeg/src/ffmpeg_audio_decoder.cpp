@@ -2,6 +2,7 @@
 #include "ffmpeg_audio_encoder.h"
 
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/classes/file_access.hpp>
 
 #include <algorithm>
@@ -371,7 +372,7 @@ int FFmpegAudioTranscoder::transcode_file(const String &p_input_path, const Stri
     const int sr = output_sample_rate > 0 ? output_sample_rate : decoder->get_sample_rate();
     const int ch = output_channels > 0 ? output_channels : decoder->get_channels();
 
-    if (encoder->setup_encoder(codec_to_use, sr, ch, 128000) != 0) {
+    if (encoder->setup_encoder(codec_to_use, sr, ch, 128000, Dictionary()) != 0) {
         log_ffmpeg_dec("Failed to setup encoder");
         return 2;
     }
