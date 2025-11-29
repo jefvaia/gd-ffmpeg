@@ -2,6 +2,7 @@
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/classes/audio_stream_wav.hpp>
 #include <godot_cpp/variant/audio_frame.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
@@ -54,6 +55,11 @@ public:
 
     PackedFloat32Array decode_pcm();
     Array decode_audio_frames();
+    Ref<AudioStreamWAV> decode_audio_stream();
+
+    PackedFloat32Array decode_pcm_from_file(const String &p_path);
+    Array decode_audio_frames_from_file(const String &p_path);
+    Ref<AudioStreamWAV> decode_audio_stream_from_file(const String &p_path);
 
     int get_sample_rate() const { return target_sample_rate; }
     int get_channels() const { return target_channels; }

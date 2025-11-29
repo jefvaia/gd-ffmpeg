@@ -4,6 +4,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/classes/file_access.hpp>
+#include <godot_cpp/core/math.hpp>
 
 #include <algorithm>
 
@@ -64,6 +65,10 @@ void FFmpegAudioDecoder::_bind_methods() {
     ClassDB::bind_method(D_METHOD("load_bytes", "data"), &FFmpegAudioDecoder::load_bytes);
     ClassDB::bind_method(D_METHOD("decode_pcm"), &FFmpegAudioDecoder::decode_pcm);
     ClassDB::bind_method(D_METHOD("decode_audio_frames"), &FFmpegAudioDecoder::decode_audio_frames);
+    ClassDB::bind_method(D_METHOD("decode_audio_stream"), &FFmpegAudioDecoder::decode_audio_stream);
+    ClassDB::bind_method(D_METHOD("decode_pcm_from_file", "path"), &FFmpegAudioDecoder::decode_pcm_from_file);
+    ClassDB::bind_method(D_METHOD("decode_audio_frames_from_file", "path"), &FFmpegAudioDecoder::decode_audio_frames_from_file);
+    ClassDB::bind_method(D_METHOD("decode_audio_stream_from_file", "path"), &FFmpegAudioDecoder::decode_audio_stream_from_file);
     ClassDB::bind_method(D_METHOD("get_sample_rate"), &FFmpegAudioDecoder::get_sample_rate);
     ClassDB::bind_method(D_METHOD("get_channels"), &FFmpegAudioDecoder::get_channels);
 }
@@ -319,6 +324,59 @@ Array FFmpegAudioDecoder::decode_audio_frames() {
         frames.push_back(f);
     }
     return frames;
+}
+
+Ref<AudioStreamWAV> FFmpegAudioDecoder::decode_audio_stream() {
+    PackedFloat32Array pcm = decode_pcm();
+    if (pcm.is_empty()) {
+        return Ref<AudioStreamWAV>();
+    }
+
+    const int ch = target_channels > 0 ? target_channels : 2;
+    Ref<AudioStreamWAV> stream;
+    stream.instantiate();
+    stream->set_mix_rate(target_sample_rate);
+    stream->set_stereo(ch > 1);
+    stream->set_format(AudioStreamWAV::FORMAT_16_BITS);
+
+    PackedByteArray data;
+    data.resize(pcm.size() * static_cast<int>(sizeof(int16_t)));
+    int16_t *dst = reinterpret_cast<int16_t *>(data.ptrw());
+    const float *src = pcm.ptr();
+    for (int i = 0; i < pcm.size(); i++) {
+        const float clamped = Math::clamp(src[i], -1.0f, 1.0f);
+        dst[i] = static_cast<int16_t>(clamped * 32767.0f);
+    }
+
+    stream->set_data(data);
+    return stream;
+}
+
+PackedFloat32Array FFmpegAudioDecoder::decode_pcm_from_file(const String &p_path) {
+    if (load_file(p_path) != 0) {
+        return PackedFloat32Array();
+    }
+    PackedFloat32Array pcm = decode_pcm();
+    clear_resources();
+    return pcm;
+}
+
+Array FFmpegAudioDecoder::decode_audio_frames_from_file(const String &p_path) {
+    if (load_file(p_path) != 0) {
+        return Array();
+    }
+    Array frames = decode_audio_frames();
+    clear_resources();
+    return frames;
+}
+
+Ref<AudioStreamWAV> FFmpegAudioDecoder::decode_audio_stream_from_file(const String &p_path) {
+    if (load_file(p_path) != 0) {
+        return Ref<AudioStreamWAV>();
+    }
+    Ref<AudioStreamWAV> stream = decode_audio_stream();
+    clear_resources();
+    return stream;
 }
 
 // ----------------------------- Transcoder -----------------------------

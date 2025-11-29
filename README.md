@@ -24,6 +24,17 @@ var options = {
 var result = audio.setup_encoder("aac", 48000, 2, 128000, options)
 ```
 
+Godot-native inputs are supported alongside raw PCM buffers:
+
+```gdscript
+# Encode from AudioFrame arrays
+var encoded = audio.encode_audio_frames(my_frames)
+encoded.append_array(audio.flush())
+
+# Encode from an AudioStreamWAV, muxed directly to a file
+audio.encode_audio_stream_to_file(my_wav_stream, "user://encoded.aac")
+```
+
 ## Video encoding
 
 `FFmpegVideoEncoder` exposes setters for common rate control options that are applied to the codec context and its private data before the encoder is opened and parameters are copied to the muxed stream:
@@ -49,4 +60,20 @@ video.set_keyframe_interval(60)
 var bytes = video.encode_images(frame_array)
 ```
 
+`encode_images` accepts `Image`, `Texture2D`, and filesystem paths (loaded into an Image) so Godot textures can be passed directly. Use `encode_images_to_file` to mux frames to disk while keeping `encode_images` for in-memory buffers.
+
 Defaults aim for a reasonable balance between file size and quality but can be tuned per stream to match project requirements.
+
+## Decoding helpers
+
+Audio and video decoders expose Godot-friendly outputs in addition to raw buffers:
+
+```gdscript
+var audio_decoder = FFmpegAudioDecoder.new()
+var audio_stream = audio_decoder.decode_audio_stream_from_file("res://input.ogg")
+
+var video_decoder = FFmpegVideoDecoder.new()
+var textures = video_decoder.decode_textures_from_file("res://clip.mp4")
+```
+
+Raw PCM (`decode_pcm`) and RGBA byte arrays (`decode_frame_bytes`) are still available for advanced control.
