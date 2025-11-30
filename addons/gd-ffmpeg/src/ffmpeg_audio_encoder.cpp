@@ -2,7 +2,7 @@
 
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/variant/variant.hpp>
-#include <godot_cpp/classes/file_access.hpp>
+#include <godot_cpp/core/error_macros.hpp>
 
 #include <cstring>
 
@@ -185,6 +185,14 @@ void FFmpegAudioEncoder::_bind_methods() {
         &FFmpegAudioEncoder::encode
     );
     ClassDB::bind_method(
+        D_METHOD("encode_bytes", "pcm_bytes"),
+        &FFmpegAudioEncoder::encode_bytes
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_stream_peer", "stream_peer", "bytes"),
+        &FFmpegAudioEncoder::encode_stream_peer
+    );
+    ClassDB::bind_method(
         D_METHOD("encode_audio_frames", "frames"),
         &FFmpegAudioEncoder::encode_audio_frames
     );
@@ -203,6 +211,22 @@ void FFmpegAudioEncoder::_bind_methods() {
     ClassDB::bind_method(
         D_METHOD("encode_audio_stream_to_file", "stream", "path"),
         &FFmpegAudioEncoder::encode_audio_stream_to_file
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_pcm_bytes_to_stream_peer", "pcm_bytes", "stream_peer"),
+        &FFmpegAudioEncoder::encode_pcm_bytes_to_stream_peer
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_pcm_to_stream_peer", "pcm_interleaved", "stream_peer"),
+        &FFmpegAudioEncoder::encode_pcm_to_stream_peer
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_pcm_to_file_access", "pcm_interleaved", "file_access"),
+        &FFmpegAudioEncoder::encode_pcm_to_file_access
+    );
+    ClassDB::bind_method(
+        D_METHOD("encode_pcm_bytes_to_file_access", "pcm_bytes", "file_access"),
+        &FFmpegAudioEncoder::encode_pcm_bytes_to_file_access
     );
     ClassDB::bind_method(
         D_METHOD("flush"),
@@ -367,6 +391,7 @@ int FFmpegAudioEncoder::setup_encoder(const String &p_codec_name, int p_sample_r
         return 7;
     }
 
+    frame_size = codec_ctx->frame_size > 0 ? codec_ctx->frame_size : 1024;
     initialized = true;
     return 0;
 }
@@ -389,13 +414,6 @@ PackedByteArray FFmpegAudioEncoder::encode(const PackedFloat32Array &p_pcm_inter
     }
 
     const int total_samples = total_floats / channels;
-
-    // Determine a reasonable frame size
-    int frame_size = codec_ctx->frame_size;
-    if (frame_size <= 0) {
-        // Some encoders report 0 for variable frame size; pick a chunk size.
-        frame_size = 1024;
-    }
 
     // Allocate frame buffers for the maximum chunk size
     frame->nb_samples = frame_size;
@@ -483,6 +501,41 @@ PackedByteArray FFmpegAudioEncoder::encode(const PackedFloat32Array &p_pcm_inter
     return output;
 }
 
+PackedByteArray FFmpegAudioEncoder::encode_bytes(const PackedByteArray &p_pcm_bytes) {
+    if (p_pcm_bytes.is_empty()) {
+        return PackedByteArray();
+    }
+
+    const int sample_count = p_pcm_bytes.size() / static_cast<int>(sizeof(float));
+    if (sample_count <= 0) {
+        return PackedByteArray();
+    }
+
+    PackedFloat32Array pcm;
+    pcm.resize(sample_count);
+    std::memcpy(pcm.ptrw(), p_pcm_bytes.ptr(), sample_count * sizeof(float));
+
+    return encode(pcm);
+}
+
+PackedByteArray FFmpegAudioEncoder::encode_stream_peer(const Ref<StreamPeer> &p_stream_peer, int p_bytes) {
+    if (p_stream_peer.is_null()) {
+        return PackedByteArray();
+    }
+
+    int to_read = p_bytes;
+    if (to_read <= 0) {
+        to_read = p_stream_peer->get_available_bytes();
+    }
+
+    if (to_read <= 0) {
+        return PackedByteArray();
+    }
+
+    PackedByteArray raw = p_stream_peer->get_data(to_read);
+    return encode_bytes(raw);
+}
+
 
 PackedByteArray FFmpegAudioEncoder::encode_audio_frames(const Array &p_frames) {
     PackedFloat32Array pcm = frames_to_pcm(p_frames, channels);
@@ -516,6 +569,26 @@ static int write_bytes_to_file(const PackedByteArray &p_bytes, const String &p_p
     return 0;
 }
 
+static int write_bytes_to_stream_peer(const PackedByteArray &p_bytes, const Ref<StreamPeer> &p_stream_peer) {
+    if (p_stream_peer.is_null()) {
+        UtilityFunctions::printerr("[FFmpegAudioEncoder] StreamPeer is null");
+        return 1;
+    }
+
+    const Error err = p_stream_peer->put_data(p_bytes);
+    return err == OK ? 0 : 1;
+}
+
+static int write_bytes_to_file_access(const PackedByteArray &p_bytes, const Ref<FileAccess> &p_file) {
+    if (p_file.is_null()) {
+        UtilityFunctions::printerr("[FFmpegAudioEncoder] FileAccess is null");
+        return 1;
+    }
+
+    p_file->store_buffer(p_bytes);
+    return 0;
+}
+
 int FFmpegAudioEncoder::encode_pcm_to_file(const PackedFloat32Array &p_pcm_interleaved, const String &p_path) {
     PackedByteArray data = encode(p_pcm_interleaved);
     data.append_array(flush());
@@ -541,6 +614,42 @@ int FFmpegAudioEncoder::encode_audio_stream_to_file(const Ref<AudioStream> &p_st
         return 1;
     }
     return write_bytes_to_file(data, p_path);
+}
+
+int FFmpegAudioEncoder::encode_pcm_bytes_to_stream_peer(const PackedByteArray &p_pcm_bytes, const Ref<StreamPeer> &p_stream_peer) {
+    PackedByteArray data = encode_bytes(p_pcm_bytes);
+    data.append_array(flush());
+    if (data.is_empty()) {
+        return 1;
+    }
+    return write_bytes_to_stream_peer(data, p_stream_peer);
+}
+
+int FFmpegAudioEncoder::encode_pcm_to_stream_peer(const PackedFloat32Array &p_pcm_interleaved, const Ref<StreamPeer> &p_stream_peer) {
+    PackedByteArray data = encode(p_pcm_interleaved);
+    data.append_array(flush());
+    if (data.is_empty()) {
+        return 1;
+    }
+    return write_bytes_to_stream_peer(data, p_stream_peer);
+}
+
+int FFmpegAudioEncoder::encode_pcm_to_file_access(const PackedFloat32Array &p_pcm_interleaved, const Ref<FileAccess> &p_file) {
+    PackedByteArray data = encode(p_pcm_interleaved);
+    data.append_array(flush());
+    if (data.is_empty()) {
+        return 1;
+    }
+    return write_bytes_to_file_access(data, p_file);
+}
+
+int FFmpegAudioEncoder::encode_pcm_bytes_to_file_access(const PackedByteArray &p_pcm_bytes, const Ref<FileAccess> &p_file) {
+    PackedByteArray data = encode_bytes(p_pcm_bytes);
+    data.append_array(flush());
+    if (data.is_empty()) {
+        return 1;
+    }
+    return write_bytes_to_file_access(data, p_file);
 }
 
 PackedByteArray FFmpegAudioEncoder::flush() {

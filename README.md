@@ -35,6 +35,25 @@ encoded.append_array(audio.flush())
 audio.encode_audio_stream_to_file(my_wav_stream, "user://encoded.aac")
 ```
 
+When feeding data incrementally (for example, microphone captures or streamed samples), pass raw float32 PCM bytes directly:
+
+```gdscript
+var bytes = my_stream_peer.get_data(my_stream_peer.get_available_bytes())
+var packet_chunk = audio.encode_bytes(bytes)
+packet_chunk.append_array(audio.flush())
+
+# StreamPeer input/output is also supported for live pipelines
+var packet_chunk_2 = audio.encode_stream_peer(my_stream_peer)
+audio.encode_pcm_bytes_to_stream_peer(bytes, my_output_stream)
+```
+
+If you want to write to a custom `FileAccess` (for example, a sandboxed or virtual filesystem), use the dedicated helpers instead of path-based writes:
+
+```gdscript
+var file := FileAccess.open("user://live.opus", FileAccess.WRITE)
+audio.encode_pcm_to_file_access(my_pcm_floats, file)
+```
+
 ## Video encoding
 
 `FFmpegVideoEncoder` exposes setters for common rate control options that are applied to the codec context and its private data before the encoder is opened and parameters are copied to the muxed stream:
