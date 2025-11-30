@@ -3,6 +3,7 @@
 #include <godot_cpp/core/error_macros.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/variant/variant.hpp>
+#include <godot_cpp/variant/dictionary.hpp>
 #include <cstring>
 
 namespace godot {
@@ -72,8 +73,13 @@ void FFmpegVideoEncoder::_bind_methods() {
     ClassDB::bind_method(D_METHOD("begin", "path", "stream_peer", "file_access"), &FFmpegVideoEncoder::begin);
     ClassDB::bind_method(D_METHOD("push_image", "image"), &FFmpegVideoEncoder::push_image);
     ClassDB::bind_method(D_METHOD("push_frame_bytes", "bytes", "width", "height", "format"), &FFmpegVideoEncoder::push_frame_bytes);
+    ClassDB::bind_method(D_METHOD("push_frame_bytes_strided", "bytes", "width", "height", "line_sizes", "format"), &FFmpegVideoEncoder::push_frame_bytes_strided);
     ClassDB::bind_method(D_METHOD("push_frame_stream_peer", "stream_peer", "bytes", "width", "height", "format"), &FFmpegVideoEncoder::push_frame_stream_peer);
     ClassDB::bind_method(D_METHOD("end"), &FFmpegVideoEncoder::end);
+
+    ClassDB::bind_method(D_METHOD("set_packet_callback", "callable"), &FFmpegVideoEncoder::set_packet_callback);
+    ClassDB::bind_method(D_METHOD("get_packet_callback"), &FFmpegVideoEncoder::get_packet_callback);
+    ClassDB::bind_method(D_METHOD("drain_packets"), &FFmpegVideoEncoder::drain_packets);
 
     // Encoding entry points
     ClassDB::bind_method(D_METHOD("encode_images_to_file", "frames", "path"),
@@ -246,6 +252,7 @@ void FFmpegVideoEncoder::reset_state() {
 
     pending_output.clear();
     full_output.clear();
+    buffered_packets.clear();
     collecting_output = false;
     output_stream_peer = Ref<StreamPeer>();
     output_file_access = Ref<FileAccess>();
@@ -443,7 +450,7 @@ int FFmpegVideoEncoder::initialize_encoder(int p_width, int p_height, AVPixelFor
     return 0;
 }
 
-PackedByteArray FFmpegVideoEncoder::encode_frame_internal(const uint8_t *p_src, int p_src_size, int p_width, int p_height, AVPixelFormat p_src_format) {
+PackedByteArray FFmpegVideoEncoder::encode_frame_internal(const uint8_t *p_src, int p_src_size, int p_width, int p_height, AVPixelFormat p_src_format, const int *p_linesizes, int p_linesize_count) {
     PackedByteArray output;
     pending_output.clear();
 
@@ -466,12 +473,31 @@ PackedByteArray FFmpegVideoEncoder::encode_frame_internal(const uint8_t *p_src, 
     src_frame.width = final_width;
     src_frame.height = final_height;
 
-    const int required_size = av_image_get_buffer_size(p_src_format, final_width, final_height, 1);
-    if (required_size <= 0 || p_src_size < required_size) {
-        log_video_encoder("Could not compute buffer size for frame");
+    int linesizes[AV_NUM_DATA_POINTERS] = {0};
+    const bool custom_linesizes = p_linesizes && p_linesize_count > 0;
+    if (custom_linesizes) {
+        const int to_copy = p_linesize_count < AV_NUM_DATA_POINTERS ? p_linesize_count : AV_NUM_DATA_POINTERS;
+        for (int i = 0; i < to_copy; i++) {
+            linesizes[i] = p_linesizes[i];
+        }
+    } else {
+        if (av_image_fill_linesizes(linesizes, p_src_format, final_width) < 0) {
+            log_video_encoder("Could not compute line sizes for frame");
+            return output;
+        }
+    }
+
+    uint8_t *temp_data[AV_NUM_DATA_POINTERS] = {nullptr};
+    const int required_size = av_image_fill_pointers(temp_data, p_src_format, final_height, const_cast<uint8_t *>(p_src), linesizes);
+    if (required_size < 0 || required_size > p_src_size) {
+        log_video_encoder("Invalid buffer/stride combination for frame");
         return output;
     }
-    av_image_fill_arrays(src_frame.data, src_frame.linesize, p_src, p_src_format, final_width, final_height, 1);
+
+    for (int i = 0; i < AV_NUM_DATA_POINTERS; i++) {
+        src_frame.data[i] = temp_data[i];
+        src_frame.linesize[i] = linesizes[i];
+    }
 
     SwsContext *active_sws = sws_ctx;
     if (p_src_format != codec_ctx->pix_fmt || p_width != codec_ctx->width || p_height != codec_ctx->height) {
@@ -526,6 +552,7 @@ PackedByteArray FFmpegVideoEncoder::encode_frame_internal(const uint8_t *p_src, 
             log_video_encoder("Failed to receive packet");
             break;
         }
+        dispatch_packet(pkt);
         pkt->stream_index = stream->index;
         av_packet_rescale_ts(pkt, codec_ctx->time_base, stream->time_base);
         if (av_interleaved_write_frame(format_ctx, pkt) < 0) {
@@ -555,6 +582,7 @@ int FFmpegVideoEncoder::flush_internal(PackedByteArray &r_output) {
         if (receive_ret < 0) {
             break;
         }
+        dispatch_packet(pkt);
         pkt->stream_index = stream->index;
         av_packet_rescale_ts(pkt, codec_ctx->time_base, stream->time_base);
         av_interleaved_write_frame(format_ctx, pkt);
@@ -604,6 +632,21 @@ PackedByteArray FFmpegVideoEncoder::push_frame_bytes(const PackedByteArray &p_by
         return output;
     }
     return encode_frame_internal(p_bytes.ptr(), p_bytes.size(), p_width, p_height, src_fmt);
+}
+
+PackedByteArray FFmpegVideoEncoder::push_frame_bytes_strided(const PackedByteArray &p_bytes, int p_width, int p_height, const PackedInt32Array &p_line_sizes, const String &p_format) {
+    PackedByteArray output;
+    if (p_bytes.is_empty()) {
+        return output;
+    }
+
+    const AVPixelFormat src_fmt = pixel_format_from_string(p_format);
+    if (src_fmt == AV_PIX_FMT_NONE) {
+        log_video_encoder("Unknown pixel format: " + p_format);
+        return output;
+    }
+
+    return encode_frame_internal(p_bytes.ptr(), p_bytes.size(), p_width, p_height, src_fmt, p_line_sizes.ptr(), p_line_sizes.size());
 }
 
 PackedByteArray FFmpegVideoEncoder::push_frame_stream_peer(const Ref<StreamPeer> &p_stream_peer, int p_bytes, int p_width, int p_height, const String &p_format) {
@@ -680,6 +723,48 @@ int FFmpegVideoEncoder::encode_internal(const Array &p_frames, const String &p_p
         frames.write[i] = image_from_any(p_frames[i]);
     }
     return encode_internal(frames, p_path, r_bytes);
+}
+
+void FFmpegVideoEncoder::dispatch_packet(const AVPacket *p_packet) {
+    if (!p_packet) {
+        return;
+    }
+
+    Dictionary payload;
+    PackedByteArray data;
+    if (p_packet->size > 0 && p_packet->data) {
+        data.resize(p_packet->size);
+        memcpy(data.ptrw(), p_packet->data, p_packet->size);
+    }
+
+    payload["data"] = data;
+    payload["pts"] = p_packet->pts;
+    payload["dts"] = p_packet->dts;
+    payload["duration"] = p_packet->duration;
+    payload["is_key"] = (p_packet->flags & AV_PKT_FLAG_KEY) != 0;
+    payload["time_base_num"] = codec_ctx ? codec_ctx->time_base.num : 0;
+    payload["time_base_den"] = codec_ctx ? codec_ctx->time_base.den : 0;
+    payload["stream_index"] = stream ? stream->index : -1;
+
+    if (packet_callback.is_valid()) {
+        packet_callback.call(payload);
+    } else {
+        buffered_packets.append(payload);
+    }
+}
+
+void FFmpegVideoEncoder::set_packet_callback(const Callable &p_callable) {
+    packet_callback = p_callable;
+}
+
+Callable FFmpegVideoEncoder::get_packet_callback() const {
+    return packet_callback;
+}
+
+Array FFmpegVideoEncoder::drain_packets() {
+    Array out = buffered_packets;
+    buffered_packets.clear();
+    return out;
 }
 
 String FFmpegVideoEncoder::get_codec_name() const {

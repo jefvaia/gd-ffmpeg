@@ -7,7 +7,9 @@
 #include <godot_cpp/classes/stream_peer.hpp>
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/callable.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
 
 extern "C" {
     #include <libavcodec/avcodec.h>
@@ -50,6 +52,8 @@ private:
     bool header_written = false;
     PackedByteArray pending_output;
     PackedByteArray full_output;
+    Array buffered_packets;
+    Callable packet_callback;
     Ref<StreamPeer> output_stream_peer;
     Ref<FileAccess> output_file_access;
     String output_path;
@@ -57,8 +61,9 @@ private:
 
     int initialize_encoder(int p_width, int p_height, AVPixelFormat p_src_format);
     void reset_state();
-    PackedByteArray encode_frame_internal(const uint8_t *p_src, int p_src_size, int p_width, int p_height, AVPixelFormat p_src_format);
+    PackedByteArray encode_frame_internal(const uint8_t *p_src, int p_src_size, int p_width, int p_height, AVPixelFormat p_src_format, const int *p_linesizes = nullptr, int p_linesize_count = 0);
     int flush_internal(PackedByteArray &r_output);
+    void dispatch_packet(const AVPacket *p_packet);
     static int write_callback(void *p_opaque, uint8_t *p_buf, int p_buf_size);
 
     int encode_internal(const Vector<Ref<Image>> &p_frames, const String &p_path, PackedByteArray *r_bytes);
@@ -107,8 +112,13 @@ public:
     int begin(const String &p_path = String(), const Ref<StreamPeer> &p_stream_peer = Ref<StreamPeer>(), const Ref<FileAccess> &p_file_access = Ref<FileAccess>());
     PackedByteArray push_image(const Ref<Image> &p_image);
     PackedByteArray push_frame_bytes(const PackedByteArray &p_bytes, int p_width, int p_height, const String &p_format = "rgba");
+    PackedByteArray push_frame_bytes_strided(const PackedByteArray &p_bytes, int p_width, int p_height, const PackedInt32Array &p_line_sizes, const String &p_format = "rgba");
     PackedByteArray push_frame_stream_peer(const Ref<StreamPeer> &p_stream_peer, int p_bytes, int p_width, int p_height, const String &p_format = "rgba");
     PackedByteArray end();
+
+    void set_packet_callback(const Callable &p_callable);
+    Callable get_packet_callback() const;
+    Array drain_packets();
 
     // Encode an array of Image or ImageTexture frames into a video file.
     // Returns 0 on success.
