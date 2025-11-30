@@ -81,6 +81,31 @@ var bytes = video.encode_images(frame_array)
 
 `encode_images` accepts `Image`, `Texture2D`, and filesystem paths (loaded into an Image) so Godot textures can be passed directly. Use `encode_images_to_file` to mux frames to disk while keeping `encode_images` for in-memory buffers.
 
+When you want a streaming pipeline (for example, piping packets over a socket or incrementally adding frames as they arrive), initialize the encoder with `begin` and push frames one at a time. Frames can come from Godot Images or raw RGBA/YUV byte buffers:
+
+```gdscript
+var video = FFmpegVideoEncoder.new()
+video.set_resolution(1280, 720)
+video.set_frame_rate(60)
+
+# Stream to memory (default) or straight into a StreamPeer/FileAccess
+video.begin() # or video.begin("", my_stream_peer) / video.begin("", null, my_file_access)
+
+# Push Image instances
+video.push_image(my_image)
+
+# Push raw pixel data (RGBA, YUV420P, YUV422P, NV12, etc.)
+var packet_bytes = video.push_frame_bytes(rgba_bytes, 1280, 720, "rgba")
+
+# Read frames from a StreamPeer without staging them first
+var wire_chunk = video.push_frame_stream_peer(my_stream_peer, packet_length, 1280, 720, "yuv420p")
+
+# Finish and collect any trailing data (trailer/flush)
+packet_bytes.append_array(video.end())
+```
+
+When a `StreamPeer` or `FileAccess` is provided to `begin`, muxed data is written directly as packets are generated so the encoded output can be forwarded without holding the whole movie in memory.
+
 Defaults aim for a reasonable balance between file size and quality but can be tuned per stream to match project requirements.
 
 ## Decoding helpers

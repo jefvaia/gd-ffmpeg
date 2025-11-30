@@ -3,6 +3,8 @@
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/classes/texture2d.hpp>
+#include <godot_cpp/classes/file_access.hpp>
+#include <godot_cpp/classes/stream_peer.hpp>
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
@@ -34,6 +36,31 @@ private:
     String profile;
     int keyframe_interval = 12;
 
+    // Streaming state
+    AVFormatContext *format_ctx = nullptr;
+    AVCodecContext *codec_ctx = nullptr;
+    AVStream *stream = nullptr;
+    AVFrame *frame = nullptr;
+    AVPacket *pkt = nullptr;
+    SwsContext *sws_ctx = nullptr;
+    AVIOContext *custom_io = nullptr;
+    uint8_t *custom_io_buffer = nullptr;
+    int64_t pts_counter = 0;
+    bool collecting_output = false;
+    bool header_written = false;
+    PackedByteArray pending_output;
+    PackedByteArray full_output;
+    Ref<StreamPeer> output_stream_peer;
+    Ref<FileAccess> output_file_access;
+    String output_path;
+    String muxer_name = "mp4";
+
+    int initialize_encoder(int p_width, int p_height, AVPixelFormat p_src_format);
+    void reset_state();
+    PackedByteArray encode_frame_internal(const uint8_t *p_src, int p_src_size, int p_width, int p_height, AVPixelFormat p_src_format);
+    int flush_internal(PackedByteArray &r_output);
+    static int write_callback(void *p_opaque, uint8_t *p_buf, int p_buf_size);
+
     int encode_internal(const Vector<Ref<Image>> &p_frames, const String &p_path, PackedByteArray *r_bytes);
     int encode_internal(const Array &p_frames, const String &p_path, PackedByteArray *r_bytes);
     static Ref<Image> image_from_any(const Variant &p_value);
@@ -44,6 +71,8 @@ protected:
     static void _bind_methods();
 
 public:
+    ~FFmpegVideoEncoder();
+
     void set_codec_name(const String &p_name);
     String get_codec_name() const;
 
@@ -74,6 +103,12 @@ public:
 
     void set_keyframe_interval(int p_interval);
     int get_keyframe_interval() const;
+
+    int begin(const String &p_path = String(), const Ref<StreamPeer> &p_stream_peer = Ref<StreamPeer>(), const Ref<FileAccess> &p_file_access = Ref<FileAccess>());
+    PackedByteArray push_image(const Ref<Image> &p_image);
+    PackedByteArray push_frame_bytes(const PackedByteArray &p_bytes, int p_width, int p_height, const String &p_format = "rgba");
+    PackedByteArray push_frame_stream_peer(const Ref<StreamPeer> &p_stream_peer, int p_bytes, int p_width, int p_height, const String &p_format = "rgba");
+    PackedByteArray end();
 
     // Encode an array of Image or ImageTexture frames into a video file.
     // Returns 0 on success.
