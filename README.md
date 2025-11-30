@@ -97,6 +97,14 @@ video.push_image(my_image)
 # Push raw pixel data (RGBA, YUV420P, YUV422P, NV12, etc.)
 var packet_bytes = video.push_frame_bytes(rgba_bytes, 1280, 720, "rgba")
 
+# Push raw pixel data with explicit strides for each plane/row
+var strides = PackedInt32Array([1280 * 4])
+var packet_bytes_strided = video.push_frame_bytes_strided(rgba_bytes, 1280, 720, strides, "rgba")
+
+# Raw buffers must be contiguous and ordered using FFmpeg's plane layout for the provided pixel format
+# (e.g. packed RGB/RGBA rows for rgb24/rgba, planar Y/U/V planes for yuv420p with optional line sizes).
+# Strides are expressed in bytes per row per plane; omit them to fall back to tightly packed defaults.
+
 # Read frames from a StreamPeer without staging them first
 var wire_chunk = video.push_frame_stream_peer(my_stream_peer, packet_length, 1280, 720, "yuv420p")
 
@@ -105,6 +113,20 @@ packet_bytes.append_array(video.end())
 ```
 
 When a `StreamPeer` or `FileAccess` is provided to `begin`, muxed data is written directly as packets are generated so the encoded output can be forwarded without holding the whole movie in memory.
+
+If you want to mux or transmit raw encoded packets yourself, register a callback or poll the packet buffer:
+
+```gdscript
+video.set_packet_callback(func(packet):
+    # packet is a Dictionary with keys: data (PackedByteArray), pts, dts, duration, is_key, time_base_num, time_base_den, stream_index
+    my_muxer.write_video_packet(packet)
+)
+
+# ...or drain buffered packets when no callback is set
+var pending_packets = video.drain_packets()
+```
+
+Packet data is emitted immediately after the encoder produces it (before muxing or timestamp rescaling). Packets stay buffered until drained or until the encoder is reset via `end()`.
 
 Defaults aim for a reasonable balance between file size and quality but can be tuned per stream to match project requirements.
 
